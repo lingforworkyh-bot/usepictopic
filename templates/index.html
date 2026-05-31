@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>以圖搜圖 - 零件查詢</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, 'Segoe UI', sans-serif; background: #f0f2f5; color: #333; min-height: 100vh; }
+  .container { max-width: 800px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  .subtitle { color: #666; font-size: 14px; margin-bottom: 20px; }
+
+  .upload-box {
+    background: #fff; border-radius: 12px; padding: 40px 20px;
+    text-align: center; border: 2px dashed #ccc; cursor: pointer;
+    transition: all .2s; margin-bottom: 24px;
+  }
+  .upload-box:hover, .upload-box.dragover { border-color: #4a90d9; background: #f5f9ff; }
+  .upload-box.has-image { border-style: solid; border-color: #4a90d9; padding: 16px; }
+  .upload-box img { max-width: 100%; max-height: 300px; border-radius: 8px; }
+  .upload-icon { font-size: 48px; color: #aaa; margin-bottom: 8px; }
+  .upload-text { color: #888; }
+  .upload-hint { font-size: 13px; color: #aaa; margin-top: 4px; }
+
+  .btn {
+    display: inline-block; padding: 10px 32px; border: none; border-radius: 8px;
+    font-size: 16px; cursor: pointer; transition: all .2s; font-weight: 600;
+  }
+  .btn-primary { background: #4a90d9; color: #fff; }
+  .btn-primary:hover { background: #357abd; }
+  .btn-primary:disabled { background: #b0c4de; cursor: not-allowed; }
+
+  .status-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-radius: 8px; margin-bottom: 16px; font-size: 14px;
+  }
+  .status-ready { background: #e8f5e9; color: #2e7d32; }
+  .status-wait { background: #fff3e0; color: #e65100; }
+
+  .results { display: grid; gap: 12px; margin-top: 16px; }
+  .result-card {
+    background: #fff; border-radius: 10px; padding: 14px 16px;
+    display: flex; align-items: center; gap: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    transition: transform .15s;
+  }
+  .result-card:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+  .result-rank {
+    width: 28px; height: 28px; border-radius: 50%; background: #4a90d9;
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; flex-shrink: 0;
+  }
+  .result-info { flex: 1; min-width: 0; }
+  .result-partno { font-size: 16px; font-weight: 600; }
+  .result-meta { font-size: 13px; color: #777; margin-top: 2px; }
+  .result-sim {
+    font-size: 14px; font-weight: 600; color: #4a90d9; flex-shrink: 0;
+  }
+  .spinner { display: none; width: 20px; height: 20px; border: 3px solid #e0e0e0; border-top-color: #4a90d9; border-radius: 50%; animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading .spinner { display: inline-block; }
+  .loading .btn-text { display: none; }
+
+  .no-results { text-align: center; padding: 40px; color: #999; }
+  #error-msg { color: #d32f2f; margin-top: 8px; font-size: 14px; display: none; }
+  input[type="file"] { display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🔍 零件以圖搜圖</h1>
+  <p class="subtitle">拍照上傳即可查詢料號與庫存</p>
+
+  <div class="status-bar {{ 'status-ready' if ready else 'status-wait' }}">
+    <span>{{ '✓ 資料庫就緒' if ready else '⏳ 資料庫未建立' }}</span>
+    <span style="margin-left:auto;font-size:12px">{% if ready %}(共 {{ count }} 筆){% endif %}</span>
+  </div>
+
+  <div class="upload-box" id="uploadBox" onclick="document.getElementById('fileInput').click()">
+    <div id="uploadPlaceholder">
+      <div class="upload-icon">📷</div>
+      <div class="upload-text">點擊選取照片，或用手機拍照上傳</div>
+      <div class="upload-hint">支援 JPG / PNG</div>
+    </div>
+    <img id="preview" style="display:none" />
+  </div>
+
+  <input type="file" id="fileInput" accept="image/*" />
+
+  <div style="display:flex;gap:8px;margin-bottom:20px">
+    <button class="btn btn-primary" id="searchBtn" disabled onclick="doSearch()">
+      <span class="btn-text">🔍 搜尋相似零件</span>
+      <span class="spinner"></span>
+    </button>
+    <div id="error-msg"></div>
+  </div>
+
+  <div id="resultsArea"></div>
+</div>
+
+<script>
+  const uploadBox = document.getElementById('uploadBox');
+  const fileInput = document.getElementById('fileInput');
+  const preview = document.getElementById('preview');
+  const placeholder = document.getElementById('uploadPlaceholder');
+  const searchBtn = document.getElementById('searchBtn');
+  const resultsArea = document.getElementById('resultsArea');
+  const errorMsg = document.getElementById('error-msg');
+
+  uploadBox.addEventListener('dragover', e => { e.preventDefault(); uploadBox.classList.add('dragover'); });
+  uploadBox.addEventListener('dragleave', () => uploadBox.classList.remove('dragover'));
+  uploadBox.addEventListener('drop', e => { e.preventDefault(); uploadBox.classList.remove('dragover'); if (e.dataTransfer.files.length) { fileInput.files = e.dataTransfer.files; showPreview(e.dataTransfer.files[0]); } });
+
+  fileInput.addEventListener('change', () => { if (fileInput.files.length) showPreview(fileInput.files[0]); });
+
+  function showPreview(file) {
+    if (!file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      preview.src = e.target.result;
+      preview.style.display = 'block';
+      placeholder.style.display = 'none';
+      uploadBox.classList.add('has-image');
+      searchBtn.disabled = false;
+      errorMsg.style.display = 'none';
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async function doSearch() {
+    const file = fileInput.files[0];
+    if (!file) return;
+
+    searchBtn.classList.add('loading');
+    searchBtn.disabled = true;
+    errorMsg.style.display = 'none';
+    resultsArea.innerHTML = '';
+
+    const form = new FormData();
+    form.append('photo', file);
+
+    try {
+      const res = await fetch('/search', { method: 'POST', body: form });
+      const data = await res.json();
+
+      if (data.error) {
+        errorMsg.textContent = data.error;
+        errorMsg.style.display = 'block';
+        return;
+      }
+
+      if (!data.results || data.results.length === 0) {
+        resultsArea.innerHTML = '<div class="no-results">😕 找不到相似零件</div>';
+        return;
+      }
+
+      let html = '<div class="results">';
+      data.results.forEach((r, i) => {
+        html += `
+          <div class="result-card">
+            <div class="result-rank">${i + 1}</div>
+            <div class="result-info">
+              <div class="result-partno">${r.料號 || '—'}</div>
+              <div class="result-meta">${r.名稱 || ''} ${r.庫存 ? '｜庫存: ' + r.庫存 : ''}</div>
+            </div>
+            <div class="result-sim">${r.similarity}%</div>
+          </div>
+        `;
+      });
+      html += '</div>';
+      resultsArea.innerHTML = html;
+
+    } catch (err) {
+      errorMsg.textContent = '連線失敗: ' + err.message;
+      errorMsg.style.display = 'block';
+    } finally {
+      searchBtn.classList.remove('loading');
+      searchBtn.disabled = false;
+    }
+  }
+</script>
+</body>
+</html>
