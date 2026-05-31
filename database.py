@@ -3,7 +3,6 @@ import io
 from pathlib import Path
 import numpy as np
 from sklearn.preprocessing import normalize
-import openpyxl
 
 
 class PartDatabase:
@@ -16,6 +15,7 @@ class PartDatabase:
         if self.excel_path is None:
             raise ValueError("請指定 Excel 檔案路徑")
 
+        import openpyxl
         wb = openpyxl.load_workbook(self.excel_path)
         ws = wb.active
 
